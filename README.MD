@@ -224,10 +224,10 @@ moonloader/
 <div align="center">
 
 ### 📱 HUD интерфейс
-![HUD Interface](https://via.placeholder.com/400x200/4CAF50/FFFFFF?text=HUD+Interface)
+![HUD Interface](https://i.postimg.cc/05DSGbDt/image.png)
 
 ### ⚙️ Настройки
-![Settings](https://via.placeholder.com/400x200/2196F3/FFFFFF?text=Settings+Panel)
+![Settings](https://i.postimg.cc/Jz4BWxgg/image.png)
 
 </div>
 
@@ -269,3 +269,4 @@ moonloader/
 </div>
 
 --]]
+
