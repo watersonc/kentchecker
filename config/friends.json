@@ -1,0 +1,32 @@
+{
+  "version":{
+    "current":"1.1.0"
+  },
+  "font":{
+    "name":"Georgia",
+    "size":8,
+    "flags":0
+  },
+  "commands":{
+    "list":"klist",
+    "toggle":"ktoggle",
+    "reload":"kreload",
+    "help":"khelp",
+    "add":"kadd",
+    "update":"kupd",
+    "remove":"kremove"
+  },
+  "colors":{
+    "warning":"0xFFFACD",
+    "bg":"0x90E0FFFF",
+    "aqua":"0xAEEEEE",
+    "red":"0xFFB6C1",
+    "text":"0xFFF8F8FF"
+  },
+  "update":{
+    "enabled":true,
+    "auto_check":true
+  },
+  "friends":{
+  }
+}

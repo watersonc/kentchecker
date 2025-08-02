@@ -1,11 +1,11 @@
 script_name("kent checker")
-script_version("1.0.0")
+script_version("1.1.0")
 
 local encoding = require("encoding")
 encoding.default = "CP1251"
 local u8 = encoding.UTF8
 
-local inicfg = require 'inicfg'
+local dkjson = require("dkjson")
 local cjson = require("cjson")
 
 -- GitHub update system
@@ -13,7 +13,9 @@ local GITHUB_REPO = "watersonc/kentchecker"
 local GITHUB_RAW_URL = "https://raw.githubusercontent.com/" .. GITHUB_REPO .. "/main/kentchecker.lua"
 local GITHUB_API_URL = "https://api.github.com/repos/" .. GITHUB_REPO .. "/releases/latest"
 
-local CONFIG_FILE = "friends.ini"
+-- CONFIG_FILE now points to moonloader/config/friends.json
+local CONFIG_DIR = "moonloader/config/"
+local CONFIG_FILE = CONFIG_DIR .. "friends.json"
 local DEFAULT_CONFIG = {
     version = {
         current = "1.0.0"
@@ -25,11 +27,19 @@ local DEFAULT_CONFIG = {
         text = "0xFFF8F8FF",
         bg = "0x90E0FFFF"
     },
+    font = {
+        name = "Georgia",
+        size = 8,
+        flags = 0
+    },
     commands = {
         list = "klist",
         update = "kupd",
         add = "kadd",
-        reload = "kreload"
+        reload = "kreload",
+        remove = "kremove",
+        toggle = "ktoggle",
+        help = "khelp"
     },
     update = {
         enabled = true,
@@ -56,13 +66,40 @@ local function parseColor(str)
     return tonumber(str) or 0xFFFFFFFF
 end
 
+-- Helper to check and create directory if not exists
+local function ensureConfigDir()
+    -- Only create if not exists
+    local f = io.open(CONFIG_DIR .. ".dirtest", "w")
+    if not f then
+        os.execute('mkdir "' .. CONFIG_DIR .. '"')
+    else
+        f:close()
+        os.remove(CONFIG_DIR .. ".dirtest")
+    end
+end
+
 -- Load or create config
 local function loadConfig()
     local success, err = pcall(function()
+        ensureConfigDir()
         if not doesFileExist(CONFIG_FILE) then
-            inicfg.save(DEFAULT_CONFIG, CONFIG_FILE)
+            local file = io.open(CONFIG_FILE, "w")
+            if file then
+                file:write(dkjson.encode(DEFAULT_CONFIG, { indent = true }))
+                file:close()
+            end
         end
-        config = inicfg.load(nil, CONFIG_FILE)
+        
+        local file = io.open(CONFIG_FILE, "r")
+        if file then
+            local content = file:read("*all")
+            file:close()
+            config = dkjson.decode(content) or DEFAULT_CONFIG
+        else
+            config = DEFAULT_CONFIG
+        end
+        
+        -- Merge with default config to ensure all fields exist
         for section, values in pairs(DEFAULT_CONFIG) do
             if not config[section] then config[section] = {} end
             for k, v in pairs(values) do
@@ -71,7 +108,13 @@ local function loadConfig()
                 end
             end
         end
-        inicfg.save(config, CONFIG_FILE)
+        
+        -- Save merged config
+        local file = io.open(CONFIG_FILE, "w")
+        if file then
+            file:write(dkjson.encode(config, { indent = true }))
+            file:close()
+        end
     end)
     
     if not success then
@@ -97,6 +140,9 @@ local CMD_LIST   = config.commands.list or "klist"
 local CMD_UPDATE = config.commands.update or "kupd"
 local CMD_ADD    = config.commands.add or "kadd"
 local CMD_RELOAD = config.commands.reload or "kreload"
+local CMD_REMOVE = config.commands.remove or "kremove"
+local CMD_TOGGLE = config.commands.toggle or "ktoggle"
+local CMD_HELP   = config.commands.help or "khelp"
 
 -- Friends list is stored in config.friends (as a table of [nick]=true)
 local function reloadKents()
@@ -120,11 +166,6 @@ end
 local function greet()
     local info = ("%s %s by watersonc loaded!"):format(thisScript().name, config.version.current)
     sampAddChatMessage(info, COLOR_AQUA)
-    sampAddChatMessage("- /"..CMD_LIST.." - список друзей", COLOR_WARNING)
-    sampAddChatMessage("- /"..CMD_UPDATE.." - проверить обновления", COLOR_WARNING)
-    sampAddChatMessage("- /"..CMD_UPDATE.." confirm - установить обновление", COLOR_WARNING)
-    sampAddChatMessage("- /"..CMD_ADD.." [id|ник] - добавить друга", COLOR_WARNING)
-    sampAddChatMessage("- /"..CMD_RELOAD.." - перезагрузить список друзей", COLOR_WARNING)
     if config.update.enabled and config.update.auto_check then
         sampAddChatMessage("проверка обновлений при входе на сервер включена", COLOR_AQUA)
     end
@@ -204,8 +245,69 @@ local function addKent(param)
     end
 
     config.friends[nick] = true
-    inicfg.save(config, CONFIG_FILE)
+    ensureConfigDir()
+    local file = io.open(CONFIG_FILE, "w")
+    if file then
+        file:write(dkjson.encode(config, { indent = true }))
+        file:close()
+    end
     sampAddChatMessage("друг '" .. nick .. "' добавлен!", COLOR_AQUA)
+    reloadKents()
+end
+
+local function removeKent(param)
+    if not param or param == "" then
+        sampAddChatMessage("использование: /"..CMD_REMOVE.." [id|ник]", COLOR_WARNING)
+        return
+    end
+
+    local nick = nil
+    local id = tonumber(param)
+    if id then
+        -- Если введён id, ищем ник по id
+        if not sampIsPlayerConnected(id) then
+            sampAddChatMessage("игрок с таким ID не найден!", COLOR_RED)
+            return
+        end
+        nick = sampGetPlayerNickname(id)
+    else
+        -- Если введён ник, ищем точное совпадение по нику (без пробелов)
+        nick = param
+        local found = false
+        for pid = 0, 1000 do
+            if sampIsPlayerConnected(pid) then
+                local playerNick = sampGetPlayerNickname(pid)
+                if playerNick:lower() == nick:lower() then
+                    nick = playerNick
+                    found = true
+                    break
+                end
+            end
+        end
+        if not found then
+            nick = param
+        end
+    end
+
+    nick = nick:gsub("%s+", "")
+    if nick == "" then
+        sampAddChatMessage("некорректный ник!", COLOR_RED)
+        return
+    end
+
+    if not kents[nick] then
+        sampAddChatMessage("этот друг не найден в списке!", COLOR_RED)
+        return
+    end
+
+    config.friends[nick] = nil
+    ensureConfigDir()
+    local file = io.open(CONFIG_FILE, "w")
+    if file then
+        file:write(dkjson.encode(config, { indent = true }))
+        file:close()
+    end
+    sampAddChatMessage("друг '" .. nick .. "' удален!", COLOR_AQUA)
     reloadKents()
 end
 
@@ -295,7 +397,12 @@ local function downloadUpdate()
     file:close()
     
     config.version.current = latestVersion
-    inicfg.save(config, CONFIG_FILE)
+    ensureConfigDir()
+    local configFile = io.open(CONFIG_FILE, "w")
+    if configFile then
+        configFile:write(dkjson.encode(config, { indent = true }))
+        configFile:close()
+    end
     sampAddChatMessage("обновление загружено! Версия обновлена до v" .. latestVersion, COLOR_AQUA)
     return true
 end
@@ -335,21 +442,42 @@ local function reloadFriendsCommand()
     reloadKents()
 end
 
+-- Новая функция для команды переключения отображения друзей на экране
+local function toggleKentListCommand()
+    toggleKentList()
+end
+
+-- Функция для отображения справки по командам
+local function showHelp()
+    sampAddChatMessage("=== Команды скрипта ===", COLOR_AQUA)
+    sampAddChatMessage("- /"..CMD_LIST.." - список друзей", COLOR_WARNING)
+    sampAddChatMessage("- /"..CMD_UPDATE.." - проверить обновления", COLOR_WARNING)
+    sampAddChatMessage("- /"..CMD_UPDATE.." confirm - установить обновление", COLOR_WARNING)
+    sampAddChatMessage("- /"..CMD_ADD.." [id|ник] - добавить друга", COLOR_WARNING)
+    sampAddChatMessage("- /"..CMD_REMOVE.." [id|ник] - удалить друга", COLOR_WARNING)
+    sampAddChatMessage("- /"..CMD_RELOAD.." - перезагрузить список друзей", COLOR_WARNING)
+    sampAddChatMessage("- /"..CMD_TOGGLE.." - включить/выключить отображение друзей на экране", COLOR_WARNING)
+    sampAddChatMessage("- /"..CMD_HELP.." - показать эту справку", COLOR_WARNING)
+end
+
 function main()
     while not isSampAvailable() do wait(3000) end
-    FONT = renderCreateFont("Georgia", 8, 0)
+    FONT = renderCreateFont(config.font.name, config.font.size, config.font.flags)
     
     -- Загружаем список друзей после подключения к SAMP
-    reloadKents()
     greet()
+    reloadKents()
 
     -- Регистрируем команды для GTA SAMP
     sampRegisterChatCommand(CMD_LIST, showKentList)
     sampRegisterChatCommand(CMD_UPDATE, handleUpdateCommand)
     sampRegisterChatCommand(CMD_ADD, addKent)
     sampRegisterChatCommand(CMD_RELOAD, reloadFriendsCommand)
+    sampRegisterChatCommand(CMD_REMOVE, removeKent)
+    sampRegisterChatCommand(CMD_TOGGLE, toggleKentListCommand)
+    sampRegisterChatCommand(CMD_HELP, showHelp)
 
-    -- Показываем список друзей при входе
+    -- Показываем список друзей при входе только при первом запуске, не при каждом входе на сервер
     showKentList()
     isListVisible = true
 
@@ -363,6 +491,7 @@ function main()
     end
 
     local lastServerCheck = ""
+    local firstServerJoin = true
 
     while true do
         wait(0)
@@ -377,9 +506,13 @@ function main()
                 if hasUpdate then
                     sampAddChatMessage("доступно обновление! Введите /" .. CMD_UPDATE .. " для установки", COLOR_AQUA)
                 end
-                -- Показываем список друзей при входе на сервер
-                showKentList()
-                isListVisible = true
+                -- Показываем список друзей при входе на сервер только если это не первый запуск (чтобы не было дубля)
+                if not firstServerJoin then
+                    showKentList()
+                    isListVisible = true
+                else
+                    firstServerJoin = false
+                end
             end
         end
 
